@@ -71,7 +71,7 @@ const Index = () => {
     if (!videoInfo) return;
 
     setDownloading(true);
-    setDownloadStatus("Requesting download...");
+    setDownloadStatus("Processing video...");
 
     try {
       const { data, error } = await supabase.functions.invoke("download", {
@@ -91,44 +91,25 @@ const Index = () => {
         throw new Error(data.error);
       }
 
-      // Handle different Cobalt response statuses
-      if (data.status === "tunnel" || data.status === "redirect") {
+      if (data.status === "redirect" && data.url) {
         setDownloadStatus("Starting download...");
-        // Open download URL
-        const downloadUrl = data.url;
-        if (downloadUrl) {
-          // Create a temporary link to trigger download
-          const a = document.createElement("a");
-          a.href = downloadUrl;
-          a.download = "";
-          a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          toast.success("Download started!", {
-            description: `${videoInfo.title}`,
-          });
-        }
-      } else if (data.status === "picker") {
-        // Multiple options available (e.g., different audio/video streams)
-        // Use the first one
-        const firstOption = data.picker?.[0];
-        if (firstOption?.url) {
-          const a = document.createElement("a");
-          a.href = firstOption.url;
-          a.download = "";
-          a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          toast.success("Download started!", {
-            description: `${videoInfo.title}`,
-          });
-        }
+        const a = document.createElement("a");
+        a.href = data.url;
+        a.download = "";
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        const formatInfo = data.format
+          ? `${data.format.quality} ${data.format.container?.toUpperCase()}`
+          : "";
+        toast.success("Download started!", {
+          description: `${videoInfo.title} — ${formatInfo}`,
+        });
       } else {
-        throw new Error("Unexpected response from download service");
+        throw new Error("No download URL available");
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Download failed";
