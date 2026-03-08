@@ -67,7 +67,7 @@ serve(async (req) => {
         selectedFormat = videoFormats.find((f: any) => (f.height || 0) <= targetHeight) || videoFormats[0];
       } else {
         // Video only (no audio)
-        const videoFormats = ytdl.filterFormats(info.formats, "videoonly");
+        const videoFormats = filterFormats(info.formats, "videoonly");
         videoFormats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
         
         const targetHeight = parseInt(quality) || 1080;
