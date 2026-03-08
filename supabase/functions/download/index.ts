@@ -36,7 +36,7 @@ serve(async (req) => {
       );
     }
 
-    const info = await ytdl.getInfo(url);
+    const info = await getInfo(url);
     
     // Get video details
     const videoDetails = {
