@@ -92,7 +92,13 @@ const Index = () => {
         }
       }
     };
-    loadData();
+
+    // @ts-ignore
+    if (window.pywebview && window.pywebview.api) {
+      loadData();
+    } else {
+      window.addEventListener('pywebviewready', loadData);
+    }
   }, []);
 
   const handleFetch = useCallback(async () => {

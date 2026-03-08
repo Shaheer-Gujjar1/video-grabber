@@ -10,7 +10,9 @@ class VideoDownloader:
         if d['status'] == 'downloading':
             p = d.get('_percent_str', '0%').replace('%', '')
             try:
-                percent = float(p)
+                import re
+                p_clean = re.sub(r'\x1b\[[0-9;]*m', '', p).strip()
+                percent = float(p_clean)
                 speed_bytes = d.get('speed')
                 if speed_bytes is None: speed_bytes = 0
                 speed_mb = speed_bytes / (1024 * 1024)
