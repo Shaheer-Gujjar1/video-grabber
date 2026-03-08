@@ -13,36 +13,51 @@ function extractVideoId(url: string): string | null {
   return m ? m[1] : null;
 }
 
-async function getVideoInfo(videoId: string) {
-  // Fetch the YouTube watch page
-  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const res = await fetch(watchUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept-Language": "en-US,en;q=0.9",
+// Use YouTube's internal Innertube API (player endpoint)
+async function getPlayerResponse(videoId: string) {
+  const apiUrl = "https://www.youtube.com/youtubei/v1/player";
+
+  // Use the ANDROID client - it returns direct URLs without cipher
+  // and is less likely to trigger bot detection
+  const body = {
+    videoId,
+    context: {
+      client: {
+        clientName: "ANDROID",
+        clientVersion: "19.09.37",
+        androidSdkVersion: 30,
+        hl: "en",
+        gl: "US",
+        utcOffsetMinutes: 0,
+      },
     },
+    playbackContext: {
+      contentPlaybackContext: {
+        html5Preference: "HTML5_PREF_WANTS",
+      },
+    },
+    contentCheckOk: true,
+    racyCheckOk: true,
+  };
+
+  const res = await fetch(apiUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip",
+      "X-Youtube-Client-Name": "3",
+      "X-Youtube-Client-Version": "19.09.37",
+    },
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
-    throw new Error(`Failed to fetch YouTube page: ${res.status}`);
+    const text = await res.text();
+    console.error("YouTube API error:", res.status, text.substring(0, 500));
+    throw new Error(`YouTube API returned ${res.status}`);
   }
 
-  const html = await res.text();
-
-  // Extract ytInitialPlayerResponse
-  const playerMatch = html.match(/var ytInitialPlayerResponse\s*=\s*({.+?})\s*;/s);
-  if (!playerMatch) {
-    throw new Error("Could not extract player response from YouTube page");
-  }
-
-  let playerResponse;
-  try {
-    playerResponse = JSON.parse(playerMatch[1]);
-  } catch {
-    throw new Error("Failed to parse player response JSON");
-  }
-
-  return playerResponse;
+  return await res.json();
 }
 
 serve(async (req) => {
@@ -70,24 +85,27 @@ serve(async (req) => {
 
     console.log("Processing video:", videoId);
 
-    const playerResponse = await getVideoInfo(videoId);
-
-    // Extract video details
-    const videoDetails = {
-      title: playerResponse.videoDetails?.title || "YouTube Video",
-      channel: playerResponse.videoDetails?.author || "Unknown",
-      duration: playerResponse.videoDetails?.lengthSeconds || "0",
-      thumbnail: playerResponse.videoDetails?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url || "",
-    };
+    const playerResponse = await getPlayerResponse(videoId);
 
     // Check playability
     const playability = playerResponse.playabilityStatus;
     if (playability?.status !== "OK") {
+      const reason = playability?.reason || playability?.messages?.[0] || "Video is not available";
+      console.error("Playability error:", reason);
       return new Response(
-        JSON.stringify({ error: playability?.reason || "Video is not available" }),
+        JSON.stringify({ error: reason }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Extract video details
+    const vd = playerResponse.videoDetails || {};
+    const videoDetails = {
+      title: vd.title || "YouTube Video",
+      channel: vd.author || "Unknown",
+      duration: vd.lengthSeconds || "0",
+      thumbnail: vd.thumbnail?.thumbnails?.slice(-1)?.[0]?.url || "",
+    };
 
     const streamingData = playerResponse.streamingData;
     if (!streamingData) {
@@ -97,36 +115,34 @@ serve(async (req) => {
       );
     }
 
-    // Combine muxed formats (video+audio) and adaptive formats (separate streams)
     const muxedFormats = streamingData.formats || [];
     const adaptiveFormats = streamingData.adaptiveFormats || [];
-    const allFormats = [...muxedFormats, ...adaptiveFormats];
 
     console.log(`Found ${muxedFormats.length} muxed + ${adaptiveFormats.length} adaptive formats`);
 
     let selectedFormat: any = null;
 
     if (mode === "audio") {
-      // Audio-only from adaptive formats
       const audioFormats = adaptiveFormats
         .filter((f: any) => f.mimeType?.startsWith("audio/"))
+        .filter((f: any) => f.url) // Only formats with direct URLs
         .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
 
       const targetBitrate = (parseInt(quality) || 320) * 1000;
       selectedFormat = audioFormats.find((f: any) => (f.bitrate || 0) <= targetBitrate) || audioFormats[0];
     } else {
       if (includeAudio) {
-        // Use muxed formats (have both video + audio, max 720p typically)
+        // Muxed formats (video+audio), typically up to 720p
         const videoFormats = muxedFormats
-          .filter((f: any) => f.mimeType?.startsWith("video/"))
+          .filter((f: any) => f.mimeType?.startsWith("video/") && f.url)
           .sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
 
         const targetHeight = parseInt(quality) || 1080;
         selectedFormat = videoFormats.find((f: any) => (f.height || 0) <= targetHeight) || videoFormats[0];
       } else {
-        // Video-only from adaptive formats
+        // Video-only adaptive formats (up to 4K)
         const videoFormats = adaptiveFormats
-          .filter((f: any) => f.mimeType?.startsWith("video/"))
+          .filter((f: any) => f.mimeType?.startsWith("video/") && f.url)
           .sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
 
         const targetHeight = parseInt(quality) || 1080;
@@ -134,31 +150,10 @@ serve(async (req) => {
       }
     }
 
-    if (!selectedFormat) {
+    if (!selectedFormat || !selectedFormat.url) {
       return new Response(
-        JSON.stringify({ error: "No suitable format found" }),
+        JSON.stringify({ error: "No downloadable format found. The video may be protected." }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Get download URL
-    const downloadUrl = selectedFormat.url;
-
-    if (!downloadUrl) {
-      // Format requires signature deciphering (cipher/signatureCipher)
-      // This happens with some videos - need to decode the cipher
-      const cipher = selectedFormat.signatureCipher || selectedFormat.cipher;
-      if (cipher) {
-        return new Response(
-          JSON.stringify({
-            error: "This video requires signature deciphering which is not supported yet. Try a different video or lower quality.",
-          }),
-          { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      return new Response(
-        JSON.stringify({ error: "Could not extract download URL" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -170,7 +165,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         status: "redirect",
-        url: downloadUrl,
+        url: selectedFormat.url,
         format: {
           quality: qualityLabel,
           container,
