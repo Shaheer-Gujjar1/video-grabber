@@ -50,7 +50,7 @@ serve(async (req) => {
 
     if (mode === "audio") {
       // Find best audio format matching requested bitrate
-      const audioFormats = ytdl.filterFormats(info.formats, "audioonly");
+      const audioFormats = filterFormats(info.formats, "audioonly");
       // Sort by bitrate descending
       audioFormats.sort((a: any, b: any) => (b.audioBitrate || 0) - (a.audioBitrate || 0));
       
