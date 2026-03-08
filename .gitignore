@@ -1,0 +1,19 @@
+# Node
+node_modules/
+dist/
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+build/
+bin/
+
+# Lumen Lab Internal
+"What is Lumen Lab.md"
+
+# System
+.DS_Store
+releases/

@@ -39,18 +39,18 @@ const FormatSelector = ({
   const qualities = mode === "audio" ? audioQualities : videoQualities;
 
   return (
-    <div className="animate-slide-up space-y-5">
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-8">
       <Tabs value={mode} onValueChange={onModeChange} className="w-full">
-        <TabsList className="w-full bg-secondary border border-border h-12">
+        <TabsList className="w-full bg-black/20 border border-white/5 h-14 p-1 rounded-2xl">
           <TabsTrigger
             value="video"
-            className="flex-1 font-display data-[state=active]:gradient-primary data-[state=active]:text-primary-foreground gap-2"
+            className="flex-1 font-display rounded-xl data-[state=active]:premium-gradient data-[state=active]:text-white data-[state=active]:premium-glow gap-2 transition-all duration-300"
           >
             <Video className="w-4 h-4" /> Video
           </TabsTrigger>
           <TabsTrigger
             value="audio"
-            className="flex-1 font-display data-[state=active]:gradient-primary data-[state=active]:text-primary-foreground gap-2"
+            className="flex-1 font-display rounded-xl data-[state=active]:premium-gradient data-[state=active]:text-white data-[state=active]:premium-glow gap-2 transition-all duration-300"
           >
             <Music className="w-4 h-4" /> MP3 Only
           </TabsTrigger>
@@ -60,48 +60,69 @@ const FormatSelector = ({
       {mode === "video" && (
         <button
           onClick={() => onIncludeAudioChange(!includeAudio)}
-          className="flex items-center gap-3 w-full p-3 rounded-lg border border-border bg-secondary/50 hover:bg-secondary transition-colors font-body text-sm"
+          className="flex items-center gap-4 w-full p-4 rounded-2xl glass-card hover:bg-white/10 transition-all duration-300 group"
         >
-          {includeAudio ? (
-            <Volume2 className="w-5 h-5 text-primary" />
-          ) : (
-            <VolumeX className="w-5 h-5 text-muted-foreground" />
-          )}
-          <span className="text-foreground">
-            {includeAudio ? "With audio" : "Video only (no audio)"}
-          </span>
+          <div className={`p-2 rounded-xl transition-colors ${includeAudio ? "bg-primary/20" : "bg-white/5"}`}>
+            {includeAudio ? (
+              <Volume2 className="w-5 h-5 text-primary" />
+            ) : (
+              <VolumeX className="w-5 h-5 text-muted-foreground" />
+            )}
+          </div>
+          <div className="text-left">
+            <div className="text-sm font-bold text-white">Audio Settings</div>
+            <div className="text-xs text-muted-foreground">
+              {includeAudio ? "Including original audio track" : "Downloading video stream only"}
+            </div>
+          </div>
           <div
-            className={`ml-auto w-10 h-6 rounded-full transition-colors flex items-center px-0.5 ${
-              includeAudio ? "gradient-primary" : "bg-muted"
+            className={`ml-auto w-12 h-6 rounded-full transition-all duration-500 flex items-center px-1 border border-white/10 ${
+              includeAudio ? "premium-gradient" : "bg-white/5"
             }`}
           >
             <div
-              className={`w-5 h-5 rounded-full bg-foreground transition-transform ${
-                includeAudio ? "translate-x-4" : "translate-x-0"
+              className={`w-4 h-4 rounded-full bg-white shadow-lg transition-transform duration-500 ease-out ${
+                includeAudio ? "translate-x-6" : "translate-x-0"
               }`}
             />
           </div>
         </button>
       )}
 
-      <div>
-        <h4 className="font-display text-sm font-medium text-muted-foreground mb-3">
-          {mode === "audio" ? "Audio Quality" : "Video Quality"}
-        </h4>
-        <RadioGroup value={quality} onValueChange={onQualityChange} className="space-y-2">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 px-1">
+          <div className="w-1 h-3 rounded-full bg-primary" />
+          <h4 className="font-display text-sm font-bold text-white uppercase tracking-widest">
+            {mode === "audio" ? "Audio Resolution" : "Video Resolution"}
+          </h4>
+        </div>
+        <RadioGroup value={quality} onValueChange={onQualityChange} className="grid grid-cols-1 gap-3">
           {qualities.map((q) => (
             <Label
               key={q.value}
               htmlFor={q.value}
-              className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+              className={`flex items-center gap-4 p-4 rounded-2xl cursor-pointer transition-all duration-300 border ${
                 quality === q.value
-                  ? "border-primary bg-primary/10 shadow-glow"
-                  : "border-border bg-secondary/30 hover:bg-secondary/60"
+                  ? "border-primary/50 bg-primary/10 premium-glow"
+                  : "border-white/5 bg-white/5 hover:bg-white/10 hover:border-white/10"
               }`}
             >
-              <RadioGroupItem value={q.value} id={q.value} className="border-muted-foreground data-[state=checked]:border-primary data-[state=checked]:text-primary" />
-              <span className="font-display font-semibold text-foreground text-sm">{q.label}</span>
-              <span className="text-muted-foreground text-xs font-body ml-auto">{q.desc}</span>
+              <RadioGroupItem 
+                value={q.value} 
+                id={q.value} 
+                className="border-white/20 data-[state=checked]:border-primary data-[state=checked]:text-primary" 
+              />
+              <div className="flex flex-col">
+                <span className="font-display font-bold text-white text-base">{q.label}</span>
+                <span className="text-muted-foreground text-[10px] uppercase tracking-tighter">{q.desc}</span>
+              </div>
+              <div className="ml-auto">
+                <div className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+                    quality === q.value ? "bg-primary/20 border-primary/20 text-primary" : "bg-white/5 border-white/5 text-muted-foreground"
+                }`}>
+                  {q.value === "2160" ? "ULTRA HD" : q.value === "1080" ? "FULL HD" : "STANDARD"}
+                </div>
+              </div>
             </Label>
           ))}
         </RadioGroup>

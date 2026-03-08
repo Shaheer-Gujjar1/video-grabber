@@ -3,11 +3,32 @@ import os
 import json
 import threading
 import uuid
+import sys
+import logging
+from datetime import datetime
 from downloader import VideoDownloader
 
 # Simple persistence for settings
 SETTINGS_FILE = os.path.expanduser("~/.video_grabber_settings.json")
 HISTORY_FILE = os.path.expanduser("~/.video_grabber_history.json")
+LOG_FILE = os.path.expanduser("~/.video_grabber.log")
+
+# Setup logging
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 class Api:
     def __init__(self):
@@ -62,23 +83,27 @@ class Api:
 
     def open_file_location(self, path):
         if not path or not os.path.exists(path):
-            return False
+            return
         
-        # Use system specific commands to open file explorer
+        path = os.path.abspath(path)
         import platform
         import subprocess
-
+        system = platform.system()
+        
         try:
-            if platform.system() == "Windows":
-                os.startfile(os.path.dirname(path))
-            elif platform.system() == "Darwin": # macOS
-                subprocess.Popen(["open", "-R", path])
-            else: # Linux
-                # On Linux, opening the directory is most reliable
-                subprocess.Popen(["xdg-open", os.path.dirname(path)])
-            return True
-        except:
-            return False
+            if system == 'Windows':
+                # Use explorer /select to highlight the file
+                subprocess.run(['explorer', '/select,', path])
+            elif system == 'Darwin':
+                # macOS: open -R highlights the file in Finder
+                subprocess.run(['open', '-R', path])
+            else:
+                # Linux (GTK/GNOME usually supports dbus-send for highlighting, 
+                # but xdg-open just opens the folder. We'll fallback to opening the folder)
+                folder = os.path.dirname(path)
+                subprocess.run(['xdg-open', folder])
+        except Exception as e:
+            print(f"Error opening folder: {e}")
 
     def update_progress(self, download_id, percent, speed_str, eta):
         if self._window:
@@ -116,26 +141,63 @@ class Api:
         except Exception as e:
             return {'error': str(e)}
 
+    def check_dependencies(self):
+        """Check for FFmpeg and yt-dlp. Return true if all good."""
+        import subprocess
+        import platform
+        
+        dependencies_ok = True
+        missing = []
+        
+        # Check FFmpeg
+        try:
+            subprocess.run(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            dependencies_ok = False
+            missing.append('FFmpeg')
+            
+        if not dependencies_ok:
+            system = platform.system()
+            if system == 'Windows':
+                # On Windows, we could try to auto-download, but for now we'll alert the user.
+                # Production pre-ship logic would download a static build.
+                message = "FFmpeg is missing. It is required for combining video and audio. Please install FFmpeg and add it to your PATH."
+                print(f"CRITICAL: {message}")
+            else:
+                print(f"WARNING: FFmpeg is missing. Media acquisition may fail for some formats.")
+        
+        return dependencies_ok
+
 if __name__ == '__main__':
     api = Api()
+    logging.info("Starting Lumen Lab Video Grabber")
     
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    dist_path = os.path.join(current_dir, 'dist')
-    html_path = os.path.join(dist_path, 'index.html')
+    # Use resource_path for all assets
+    html_path = resource_path(os.path.join('dist', 'index.html'))
     
     if not os.path.exists(html_path):
-        print(f"Error: Could not find compiled React app at {html_path}")
-        print("Please run 'npm run build' first.")
+        error_msg = f"Error: Could not find compiled React app at {html_path}"
+        print(error_msg)
+        logging.error(error_msg)
         os._exit(1)
 
+    # Set app icon (favicon)
+    icon_path = resource_path(os.path.join('public', 'Lumen-Lab-Favicon-BG-Removed.png'))
+    if not os.path.exists(icon_path):
+        # Fallback to general logo
+        icon_path = resource_path(os.path.join('public', 'Lumen-Lab-Logo-BG-Removed.png'))
+
+    api.check_dependencies()
+
     window = webview.create_window(
-        title='Video Grabber - YouTube Downloader',
+        title='Lumen Lab Video Grabber',
         url=f'file:///{html_path}',
         js_api=api,
         width=1000,
         height=850,
-        background_color='#12141C'
+        background_color='#020205'
     )
+
     api._window = window
     
     webview.start(debug=False)
