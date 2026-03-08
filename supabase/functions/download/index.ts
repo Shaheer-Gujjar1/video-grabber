@@ -22,16 +22,21 @@ serve(async (req) => {
     }
 
     // Use ytdl-core to get video info and download URLs
-    const ytdl = await import("npm:@distube/ytdl-core@4");
+    const ytdlModule = await import("npm:@distube/ytdl-core@4");
+    const ytdl = ytdlModule.default || ytdlModule;
 
-    if (!ytdl.validateURL(url)) {
+    const validateURL = ytdl.validateURL || ytdlModule.validateURL;
+    const filterFormats = ytdl.filterFormats || ytdlModule.filterFormats;
+    const getInfo = ytdl.getInfo || ytdlModule.getInfo;
+
+    if (validateURL && !validateURL(url)) {
       return new Response(
         JSON.stringify({ error: "Invalid YouTube URL" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const info = await ytdl.getInfo(url);
+    const info = await getInfo(url);
     
     // Get video details
     const videoDetails = {
@@ -45,7 +50,7 @@ serve(async (req) => {
 
     if (mode === "audio") {
       // Find best audio format matching requested bitrate
-      const audioFormats = ytdl.filterFormats(info.formats, "audioonly");
+      const audioFormats = filterFormats(info.formats, "audioonly");
       // Sort by bitrate descending
       audioFormats.sort((a: any, b: any) => (b.audioBitrate || 0) - (a.audioBitrate || 0));
       
@@ -55,14 +60,14 @@ serve(async (req) => {
       // Video mode
       if (includeAudio) {
         // Get formats with both video and audio
-        const videoFormats = ytdl.filterFormats(info.formats, "videoandaudio");
+        const videoFormats = filterFormats(info.formats, "videoandaudio");
         videoFormats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
         
         const targetHeight = parseInt(quality) || 1080;
         selectedFormat = videoFormats.find((f: any) => (f.height || 0) <= targetHeight) || videoFormats[0];
       } else {
         // Video only (no audio)
-        const videoFormats = ytdl.filterFormats(info.formats, "videoonly");
+        const videoFormats = filterFormats(info.formats, "videoonly");
         videoFormats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
         
         const targetHeight = parseInt(quality) || 1080;
