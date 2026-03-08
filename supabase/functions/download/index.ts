@@ -22,9 +22,14 @@ serve(async (req) => {
     }
 
     // Use ytdl-core to get video info and download URLs
-    const ytdl = await import("npm:@distube/ytdl-core@4");
+    const ytdlModule = await import("npm:@distube/ytdl-core@4");
+    const ytdl = ytdlModule.default || ytdlModule;
 
-    if (!ytdl.validateURL(url)) {
+    const validateURL = ytdl.validateURL || ytdlModule.validateURL;
+    const filterFormats = ytdl.filterFormats || ytdlModule.filterFormats;
+    const getInfo = ytdl.getInfo || ytdlModule.getInfo;
+
+    if (validateURL && !validateURL(url)) {
       return new Response(
         JSON.stringify({ error: "Invalid YouTube URL" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
