@@ -21,84 +21,120 @@ serve(async (req) => {
       );
     }
 
-    // Use ytdl-core to get video info and download URLs
-    const ytdlModule = await import("npm:@distube/ytdl-core@4");
-    const ytdl = ytdlModule.default || ytdlModule;
+    // Use youtubei.js (Innertube API) - better at avoiding bot detection
+    const { Innertube } = await import("npm:youtubei.js@^12");
 
-    const validateURL = ytdl.validateURL || ytdlModule.validateURL;
-    const filterFormats = ytdl.filterFormats || ytdlModule.filterFormats;
-    const getInfo = ytdl.getInfo || ytdlModule.getInfo;
+    const yt = await Innertube.create({
+      retrieve_player: true,
+      generate_session_locally: true,
+    });
 
-    if (validateURL && !validateURL(url)) {
+    // Extract video ID from URL
+    const videoIdMatch = url.match(
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/
+    );
+    if (!videoIdMatch) {
       return new Response(
         JSON.stringify({ error: "Invalid YouTube URL" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const info = await getInfo(url);
-    
-    // Get video details
+    const videoId = videoIdMatch[1];
+    console.log("Fetching video:", videoId);
+
+    const info = await yt.getBasicInfo(videoId);
+
     const videoDetails = {
-      title: info.videoDetails.title,
-      channel: info.videoDetails.author.name,
-      duration: info.videoDetails.lengthSeconds,
-      thumbnail: info.videoDetails.thumbnails?.[info.videoDetails.thumbnails.length - 1]?.url || "",
+      title: info.basic_info.title || "YouTube Video",
+      channel: info.basic_info.author || "Unknown",
+      duration: info.basic_info.duration || 0,
+      thumbnail: info.basic_info.thumbnail?.[0]?.url || "",
     };
 
-    let selectedFormat;
+    // Get streaming data
+    const streamingData = info.streaming_data;
+    if (!streamingData) {
+      return new Response(
+        JSON.stringify({ error: "No streaming data available for this video" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Combine all available formats
+    const allFormats = [
+      ...(streamingData.formats || []),
+      ...(streamingData.adaptive_formats || []),
+    ];
+
+    console.log("Available formats:", allFormats.length);
+
+    let selectedFormat: any = null;
 
     if (mode === "audio") {
-      // Find best audio format matching requested bitrate
-      const audioFormats = filterFormats(info.formats, "audioonly");
-      // Sort by bitrate descending
-      audioFormats.sort((a: any, b: any) => (b.audioBitrate || 0) - (a.audioBitrate || 0));
-      
-      const targetBitrate = parseInt(quality) || 320;
-      selectedFormat = audioFormats.find((f: any) => (f.audioBitrate || 0) <= targetBitrate) || audioFormats[0];
+      // Filter audio-only formats
+      const audioFormats = allFormats
+        .filter((f: any) => f.mime_type?.startsWith("audio/"))
+        .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+
+      const targetBitrate = (parseInt(quality) || 320) * 1000;
+      selectedFormat = audioFormats.find((f: any) => (f.bitrate || 0) <= targetBitrate) || audioFormats[0];
     } else {
-      // Video mode
       if (includeAudio) {
-        // Get formats with both video and audio
-        const videoFormats = filterFormats(info.formats, "videoandaudio");
-        videoFormats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
-        
+        // Formats with both video + audio (muxed)
+        const muxedFormats = allFormats
+          .filter((f: any) => f.mime_type?.startsWith("video/") && f.has_audio)
+          .sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
+
         const targetHeight = parseInt(quality) || 1080;
-        selectedFormat = videoFormats.find((f: any) => (f.height || 0) <= targetHeight) || videoFormats[0];
+        selectedFormat = muxedFormats.find((f: any) => (f.height || 0) <= targetHeight) || muxedFormats[0];
       } else {
-        // Video only (no audio)
-        const videoFormats = filterFormats(info.formats, "videoonly");
-        videoFormats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
-        
+        // Video-only formats
+        const videoFormats = allFormats
+          .filter((f: any) => f.mime_type?.startsWith("video/") && !f.has_audio)
+          .sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
+
         const targetHeight = parseInt(quality) || 1080;
         selectedFormat = videoFormats.find((f: any) => (f.height || 0) <= targetHeight) || videoFormats[0];
       }
     }
 
-    if (!selectedFormat || !selectedFormat.url) {
+    if (!selectedFormat) {
       return new Response(
-        JSON.stringify({ error: "No suitable format found for the requested quality" }),
+        JSON.stringify({ error: "No suitable format found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log("Selected format:", {
-      quality: selectedFormat.qualityLabel || selectedFormat.audioBitrate,
-      container: selectedFormat.container,
-      hasAudio: selectedFormat.hasAudio,
-      hasVideo: selectedFormat.hasVideo,
+    // Get the download URL - decipher if needed
+    let downloadUrl = selectedFormat.decipher?.(yt.session.player);
+    if (!downloadUrl) {
+      downloadUrl = selectedFormat.url;
+    }
+
+    if (!downloadUrl) {
+      return new Response(
+        JSON.stringify({ error: "Could not extract download URL" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log("Selected:", {
+      quality: selectedFormat.quality_label || `${Math.round((selectedFormat.bitrate || 0) / 1000)}kbps`,
+      mime: selectedFormat.mime_type,
+      height: selectedFormat.height,
     });
 
     return new Response(
       JSON.stringify({
         status: "redirect",
-        url: selectedFormat.url,
+        url: downloadUrl,
         format: {
-          quality: selectedFormat.qualityLabel || `${selectedFormat.audioBitrate}kbps`,
-          container: selectedFormat.container,
-          hasAudio: selectedFormat.hasAudio,
-          hasVideo: selectedFormat.hasVideo,
-          contentLength: selectedFormat.contentLength,
+          quality: selectedFormat.quality_label || `${Math.round((selectedFormat.bitrate || 0) / 1000)}kbps`,
+          container: selectedFormat.mime_type?.split("/")[1]?.split(";")[0] || "mp4",
+          hasAudio: !!selectedFormat.has_audio || mode === "audio",
+          hasVideo: selectedFormat.mime_type?.startsWith("video/") || false,
+          contentLength: selectedFormat.content_length,
         },
         videoDetails,
       }),
