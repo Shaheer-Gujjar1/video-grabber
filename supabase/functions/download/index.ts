@@ -60,7 +60,7 @@ serve(async (req) => {
       // Video mode
       if (includeAudio) {
         // Get formats with both video and audio
-        const videoFormats = ytdl.filterFormats(info.formats, "videoandaudio");
+        const videoFormats = filterFormats(info.formats, "videoandaudio");
         videoFormats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
         
         const targetHeight = parseInt(quality) || 1080;
