@@ -6,6 +6,45 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
+function extractVideoId(url: string): string | null {
+  const m = url.match(
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/
+  );
+  return m ? m[1] : null;
+}
+
+async function getVideoInfo(videoId: string) {
+  // Fetch the YouTube watch page
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const res = await fetch(watchUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch YouTube page: ${res.status}`);
+  }
+
+  const html = await res.text();
+
+  // Extract ytInitialPlayerResponse
+  const playerMatch = html.match(/var ytInitialPlayerResponse\s*=\s*({.+?})\s*;/s);
+  if (!playerMatch) {
+    throw new Error("Could not extract player response from YouTube page");
+  }
+
+  let playerResponse;
+  try {
+    playerResponse = JSON.parse(playerMatch[1]);
+  } catch {
+    throw new Error("Failed to parse player response JSON");
+  }
+
+  return playerResponse;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -21,77 +60,73 @@ serve(async (req) => {
       );
     }
 
-    // Use youtubei.js (Innertube API) - better at avoiding bot detection
-    const { Innertube } = await import("npm:youtubei.js@^12");
-
-    const yt = await Innertube.create({
-      retrieve_player: true,
-      generate_session_locally: true,
-    });
-
-    // Extract video ID from URL
-    const videoIdMatch = url.match(
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/
-    );
-    if (!videoIdMatch) {
+    const videoId = extractVideoId(url);
+    if (!videoId) {
       return new Response(
         JSON.stringify({ error: "Invalid YouTube URL" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const videoId = videoIdMatch[1];
-    console.log("Fetching video:", videoId);
+    console.log("Processing video:", videoId);
 
-    const info = await yt.getBasicInfo(videoId);
+    const playerResponse = await getVideoInfo(videoId);
 
+    // Extract video details
     const videoDetails = {
-      title: info.basic_info.title || "YouTube Video",
-      channel: info.basic_info.author || "Unknown",
-      duration: info.basic_info.duration || 0,
-      thumbnail: info.basic_info.thumbnail?.[0]?.url || "",
+      title: playerResponse.videoDetails?.title || "YouTube Video",
+      channel: playerResponse.videoDetails?.author || "Unknown",
+      duration: playerResponse.videoDetails?.lengthSeconds || "0",
+      thumbnail: playerResponse.videoDetails?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url || "",
     };
 
-    // Get streaming data
-    const streamingData = info.streaming_data;
+    // Check playability
+    const playability = playerResponse.playabilityStatus;
+    if (playability?.status !== "OK") {
+      return new Response(
+        JSON.stringify({ error: playability?.reason || "Video is not available" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const streamingData = playerResponse.streamingData;
     if (!streamingData) {
       return new Response(
-        JSON.stringify({ error: "No streaming data available for this video" }),
+        JSON.stringify({ error: "No streaming data available" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Combine all available formats
-    const allFormats = [
-      ...(streamingData.formats || []),
-      ...(streamingData.adaptive_formats || []),
-    ];
+    // Combine muxed formats (video+audio) and adaptive formats (separate streams)
+    const muxedFormats = streamingData.formats || [];
+    const adaptiveFormats = streamingData.adaptiveFormats || [];
+    const allFormats = [...muxedFormats, ...adaptiveFormats];
 
-    console.log("Available formats:", allFormats.length);
+    console.log(`Found ${muxedFormats.length} muxed + ${adaptiveFormats.length} adaptive formats`);
 
     let selectedFormat: any = null;
 
     if (mode === "audio") {
-      // Filter audio-only formats
-      const audioFormats = allFormats
-        .filter((f: any) => f.mime_type?.startsWith("audio/"))
+      // Audio-only from adaptive formats
+      const audioFormats = adaptiveFormats
+        .filter((f: any) => f.mimeType?.startsWith("audio/"))
         .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
 
       const targetBitrate = (parseInt(quality) || 320) * 1000;
       selectedFormat = audioFormats.find((f: any) => (f.bitrate || 0) <= targetBitrate) || audioFormats[0];
     } else {
       if (includeAudio) {
-        // Formats with both video + audio (muxed)
-        const muxedFormats = allFormats
-          .filter((f: any) => f.mime_type?.startsWith("video/") && f.has_audio)
+        // Use muxed formats (have both video + audio, max 720p typically)
+        const videoFormats = muxedFormats
+          .filter((f: any) => f.mimeType?.startsWith("video/"))
           .sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
 
         const targetHeight = parseInt(quality) || 1080;
-        selectedFormat = muxedFormats.find((f: any) => (f.height || 0) <= targetHeight) || muxedFormats[0];
+        selectedFormat = videoFormats.find((f: any) => (f.height || 0) <= targetHeight) || videoFormats[0];
       } else {
-        // Video-only formats
-        const videoFormats = allFormats
-          .filter((f: any) => f.mime_type?.startsWith("video/") && !f.has_audio)
+        // Video-only from adaptive formats
+        const videoFormats = adaptiveFormats
+          .filter((f: any) => f.mimeType?.startsWith("video/"))
           .sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
 
         const targetHeight = parseInt(quality) || 1080;
@@ -106,35 +141,42 @@ serve(async (req) => {
       );
     }
 
-    // Get the download URL - decipher if needed
-    let downloadUrl = selectedFormat.decipher?.(yt.session.player);
-    if (!downloadUrl) {
-      downloadUrl = selectedFormat.url;
-    }
+    // Get download URL
+    const downloadUrl = selectedFormat.url;
 
     if (!downloadUrl) {
+      // Format requires signature deciphering (cipher/signatureCipher)
+      // This happens with some videos - need to decode the cipher
+      const cipher = selectedFormat.signatureCipher || selectedFormat.cipher;
+      if (cipher) {
+        return new Response(
+          JSON.stringify({
+            error: "This video requires signature deciphering which is not supported yet. Try a different video or lower quality.",
+          }),
+          { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
       return new Response(
         JSON.stringify({ error: "Could not extract download URL" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log("Selected:", {
-      quality: selectedFormat.quality_label || `${Math.round((selectedFormat.bitrate || 0) / 1000)}kbps`,
-      mime: selectedFormat.mime_type,
-      height: selectedFormat.height,
-    });
+    const container = selectedFormat.mimeType?.split("/")[1]?.split(";")[0] || "mp4";
+    const qualityLabel = selectedFormat.qualityLabel || `${Math.round((selectedFormat.bitrate || 0) / 1000)}kbps`;
+
+    console.log("Selected:", { quality: qualityLabel, mime: selectedFormat.mimeType, height: selectedFormat.height });
 
     return new Response(
       JSON.stringify({
         status: "redirect",
         url: downloadUrl,
         format: {
-          quality: selectedFormat.quality_label || `${Math.round((selectedFormat.bitrate || 0) / 1000)}kbps`,
-          container: selectedFormat.mime_type?.split("/")[1]?.split(";")[0] || "mp4",
-          hasAudio: !!selectedFormat.has_audio || mode === "audio",
-          hasVideo: selectedFormat.mime_type?.startsWith("video/") || false,
-          contentLength: selectedFormat.content_length,
+          quality: qualityLabel,
+          container,
+          hasAudio: mode === "audio" || !!selectedFormat.audioQuality,
+          hasVideo: selectedFormat.mimeType?.startsWith("video/") || false,
+          contentLength: selectedFormat.contentLength,
         },
         videoDetails,
       }),
