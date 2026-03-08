@@ -1,10 +1,12 @@
 import { useState, useCallback } from "react";
-import { Download, Link2, Loader2, AlertCircle } from "lucide-react";
+import { Download, Link2, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import VideoPreview from "@/components/VideoPreview";
 import FormatSelector from "@/components/FormatSelector";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 
 function extractVideoId(url: string): string | null {
   const patterns = [
@@ -20,35 +22,121 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
+interface VideoInfo {
+  id: string;
+  title: string;
+  channel: string;
+  duration: string;
+}
+
 const Index = () => {
   const [url, setUrl] = useState("");
-  const [videoId, setVideoId] = useState<string | null>(null);
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<string>("");
   const [mode, setMode] = useState("video");
   const [quality, setQuality] = useState("1080");
   const [includeAudio, setIncludeAudio] = useState(true);
 
-  const handleFetch = useCallback(() => {
+  const handleFetch = useCallback(async () => {
     const id = extractVideoId(url.trim());
     if (!id) {
       toast.error("Please enter a valid YouTube URL");
       return;
     }
     setLoading(true);
-    // Simulate fetching video info
-    setTimeout(() => {
-      setVideoId(id);
-      setLoading(false);
-    }, 800);
+    try {
+      // Use noembed to get video info (free, no API key needed)
+      const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${id}`);
+      const data = await res.json();
+      setVideoInfo({
+        id,
+        title: data.title || "YouTube Video",
+        channel: data.author_name || "Unknown Channel",
+        duration: "--:--",
+      });
+    } catch {
+      setVideoInfo({
+        id,
+        title: "YouTube Video",
+        channel: "Unknown Channel",
+        duration: "--:--",
+      });
+    }
+    setLoading(false);
   }, [url]);
 
-  const handleDownload = () => {
-    const fmt = mode === "audio" ? "mp3" : "mp4";
-    const q = mode === "audio" ? `${quality}kbps` : `${quality}p`;
-    const audio = mode === "video" ? (includeAudio ? " with audio" : " no audio") : "";
-    toast.success(`Starting download: ${fmt.toUpperCase()} ${q}${audio}`, {
-      description: "Backend API integration required for actual downloads.",
-    });
+  const handleDownload = async () => {
+    if (!videoInfo) return;
+
+    setDownloading(true);
+    setDownloadStatus("Requesting download...");
+
+    try {
+      const { data, error } = await supabase.functions.invoke("download", {
+        body: {
+          url: url.trim(),
+          mode,
+          quality,
+          includeAudio,
+        },
+      });
+
+      if (error) {
+        throw new Error(error.message || "Download request failed");
+      }
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      // Handle different Cobalt response statuses
+      if (data.status === "tunnel" || data.status === "redirect") {
+        setDownloadStatus("Starting download...");
+        // Open download URL
+        const downloadUrl = data.url;
+        if (downloadUrl) {
+          // Create a temporary link to trigger download
+          const a = document.createElement("a");
+          a.href = downloadUrl;
+          a.download = "";
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          toast.success("Download started!", {
+            description: `${videoInfo.title}`,
+          });
+        }
+      } else if (data.status === "picker") {
+        // Multiple options available (e.g., different audio/video streams)
+        // Use the first one
+        const firstOption = data.picker?.[0];
+        if (firstOption?.url) {
+          const a = document.createElement("a");
+          a.href = firstOption.url;
+          a.download = "";
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          toast.success("Download started!", {
+            description: `${videoInfo.title}`,
+          });
+        }
+      } else {
+        throw new Error("Unexpected response from download service");
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Download failed";
+      toast.error("Download failed", { description: message });
+    } finally {
+      setDownloading(false);
+      setDownloadStatus("");
+    }
   };
 
   const handleModeChange = (m: string) => {
@@ -100,13 +188,13 @@ const Index = () => {
       </div>
 
       {/* Content */}
-      {videoId && (
+      {videoInfo && (
         <div className="max-w-2xl mx-auto px-4 pb-20 space-y-6">
           <VideoPreview
-            videoId={videoId}
-            title="YouTube Video"
-            duration="--:--"
-            channel="Channel Name"
+            videoId={videoInfo.id}
+            title={videoInfo.title}
+            duration={videoInfo.duration}
+            channel={videoInfo.channel}
           />
 
           <FormatSelector
@@ -120,18 +208,21 @@ const Index = () => {
 
           <Button
             onClick={handleDownload}
-            className="w-full h-14 gradient-primary text-primary-foreground font-display font-bold text-lg hover:opacity-90 transition-opacity shadow-glow animate-pulse-glow"
+            disabled={downloading}
+            className="w-full h-14 gradient-primary text-primary-foreground font-display font-bold text-lg hover:opacity-90 transition-opacity shadow-glow"
           >
-            <Download className="w-5 h-5 mr-2" />
-            Download {mode === "audio" ? "MP3" : "MP4"}
+            {downloading ? (
+              <>
+                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                {downloadStatus || "Processing..."}
+              </>
+            ) : (
+              <>
+                <Download className="w-5 h-5 mr-2" />
+                Download {mode === "audio" ? "MP3" : "MP4"}
+              </>
+            )}
           </Button>
-
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-secondary/50 border border-border text-xs text-muted-foreground">
-            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-            <span>
-              This is a UI demo. Connect a backend API (e.g., yt-dlp) to enable actual downloads.
-            </span>
-          </div>
         </div>
       )}
     </div>
