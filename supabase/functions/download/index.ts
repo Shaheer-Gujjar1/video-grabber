@@ -21,54 +21,88 @@ serve(async (req) => {
       );
     }
 
-    // Build Cobalt API request
-    // Cobalt API v7: https://github.com/imputnet/cobalt
-    const cobaltBody: Record<string, unknown> = {
-      url,
-      filenameStyle: "pretty",
-    };
+    // Use ytdl-core to get video info and download URLs
+    const ytdl = await import("npm:@distube/ytdl-core@4");
 
-    if (mode === "audio") {
-      cobaltBody.downloadMode = "audio";
-      cobaltBody.audioFormat = "mp3";
-      // Cobalt uses audioBitrate as a string like "320", "256", etc.
-      cobaltBody.audioBitrate = quality || "320";
-    } else {
-      cobaltBody.downloadMode = includeAudio ? "auto" : "mute";
-      // Cobalt uses videoQuality as a string like "2160", "1080", etc.
-      cobaltBody.videoQuality = quality || "1080";
-    }
-
-    console.log("Cobalt request:", JSON.stringify(cobaltBody));
-
-    const cobaltResponse = await fetch("https://api.cobalt.tools", {
-      method: "POST",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(cobaltBody),
-    });
-
-    const cobaltData = await cobaltResponse.json();
-    console.log("Cobalt response:", JSON.stringify(cobaltData));
-
-    // Cobalt returns { status: "tunnel"/"redirect"/"picker"/"error", url?, picker?, error? }
-    if (cobaltData.status === "error") {
+    if (!ytdl.validateURL(url)) {
       return new Response(
-        JSON.stringify({ error: cobaltData.error?.code || "Download failed" }),
+        JSON.stringify({ error: "Invalid YouTube URL" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
+    const info = await ytdl.getInfo(url);
+    
+    // Get video details
+    const videoDetails = {
+      title: info.videoDetails.title,
+      channel: info.videoDetails.author.name,
+      duration: info.videoDetails.lengthSeconds,
+      thumbnail: info.videoDetails.thumbnails?.[info.videoDetails.thumbnails.length - 1]?.url || "",
+    };
+
+    let selectedFormat;
+
+    if (mode === "audio") {
+      // Find best audio format matching requested bitrate
+      const audioFormats = ytdl.filterFormats(info.formats, "audioonly");
+      // Sort by bitrate descending
+      audioFormats.sort((a: any, b: any) => (b.audioBitrate || 0) - (a.audioBitrate || 0));
+      
+      const targetBitrate = parseInt(quality) || 320;
+      selectedFormat = audioFormats.find((f: any) => (f.audioBitrate || 0) <= targetBitrate) || audioFormats[0];
+    } else {
+      // Video mode
+      if (includeAudio) {
+        // Get formats with both video and audio
+        const videoFormats = ytdl.filterFormats(info.formats, "videoandaudio");
+        videoFormats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
+        
+        const targetHeight = parseInt(quality) || 1080;
+        selectedFormat = videoFormats.find((f: any) => (f.height || 0) <= targetHeight) || videoFormats[0];
+      } else {
+        // Video only (no audio)
+        const videoFormats = ytdl.filterFormats(info.formats, "videoonly");
+        videoFormats.sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
+        
+        const targetHeight = parseInt(quality) || 1080;
+        selectedFormat = videoFormats.find((f: any) => (f.height || 0) <= targetHeight) || videoFormats[0];
+      }
+    }
+
+    if (!selectedFormat || !selectedFormat.url) {
+      return new Response(
+        JSON.stringify({ error: "No suitable format found for the requested quality" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log("Selected format:", {
+      quality: selectedFormat.qualityLabel || selectedFormat.audioBitrate,
+      container: selectedFormat.container,
+      hasAudio: selectedFormat.hasAudio,
+      hasVideo: selectedFormat.hasVideo,
+    });
+
     return new Response(
-      JSON.stringify(cobaltData),
+      JSON.stringify({
+        status: "redirect",
+        url: selectedFormat.url,
+        format: {
+          quality: selectedFormat.qualityLabel || `${selectedFormat.audioBitrate}kbps`,
+          container: selectedFormat.container,
+          hasAudio: selectedFormat.hasAudio,
+          hasVideo: selectedFormat.hasVideo,
+          contentLength: selectedFormat.contentLength,
+        },
+        videoDetails,
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
     console.error("Error:", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Internal server error" }),
+      JSON.stringify({ error: error.message || "Failed to process video" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
