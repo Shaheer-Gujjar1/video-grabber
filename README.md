@@ -4,11 +4,18 @@ A premium, high-performance desktop media acquisition engine built with **React*
 
 ![Lumen Lab Logo](public/Lumen-Lab-Logo-BG-Removed.png)
 
-> ⚠️ **Debian-based Linux only (Deb/Ubuntu)**
+> ⚠️ **Linux & Windows Support**
 >
-> This application is intended **only for Debian-based (DEB/APT) Linux distributions** — for example **Debian, Ubuntu, Linux Mint, Pop!_OS**, and other Ubuntu/Debian derivatives.
+> This application is intended **for Debian-based (DEB/APT) Linux distributions** — for example **Debian, Ubuntu, Linux Mint, Pop!_OS**, and other Ubuntu/Debian derivatives. Windows is also supported but requires packaging into an executable.
 >
-> It depends on **APT/DEB tooling and packages**, so it is **not expected to work out-of-the-box** on non‑Debian distros such as **Arch (pacman), Fedora (dnf), openSUSE (zypper)**, etc.
+> The application depends on **APT/DEB tooling and packages**, so it is **not expected to work out-of-the-box** on non‑Debian distros such as **Arch (pacman), Fedora (dnf), openSUSE (zypper)**, etc.
+> 
+> To package the application for Windows, use the following command:
+> 
+> ```bash
+> pyinstaller --noconsole --onefile --name "LumenVideoGrabber" --add-data "dist;dist" --add-data "public;public" app.py
+> ```
+> **Note**: On Windows, `add-data` uses `;` separator, while on Linux/Mac it uses `:`.
 
 ## ✨ Features
 
