@@ -30,16 +30,22 @@ fi
 
 # 4. Create .deb structure
 echo "📂 Preparing Debian package structure..."
+mkdir -p "${DEB_DIR}/opt/${APP_NAME}"
 mkdir -p "${DEB_DIR}/usr/bin"
 mkdir -p "${DEB_DIR}/usr/share/applications"
 mkdir -p "${DEB_DIR}/usr/share/pixmaps"
 mkdir -p "${DEB_DIR}/DEBIAN"
 
-if [ -f "dist/LumenGrabber" ]; then
-    cp "dist/LumenGrabber" "${DEB_DIR}/usr/bin/${APP_NAME}"
-    chmod +x "${DEB_DIR}/usr/bin/${APP_NAME}"
+if [ -d "dist/LumenGrabber" ]; then
+    echo "📋 Copying application directory..."
+    # Copy the entire directory contents to /opt/lumen-grabber
+    cp -a "dist/LumenGrabber/." "${DEB_DIR}/opt/${APP_NAME}/"
+    chmod +x "${DEB_DIR}/opt/${APP_NAME}/LumenGrabber"
+    # Create symlink in /usr/bin
+    rm -f "${DEB_DIR}/usr/bin/${APP_NAME}"
+    ln -s "/opt/${APP_NAME}/LumenGrabber" "${DEB_DIR}/usr/bin/${APP_NAME}"
 else
-    echo "❌ Error: dist/LumenGrabber not found! Build failed."
+    echo "❌ Error: dist/LumenGrabber directory not found! Build failed."
     exit 1
 fi
 
@@ -65,7 +71,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: Lumen Lab
-Depends: ffmpeg, libgtk-3-0, libwebkit2gtk-4.0-37 | libwebkit2gtk-4.1-0, libcanberra-gtk-module, libcanberra-gtk3-module, gir1.2-webkit2-4.1 | gir1.2-webkit2-4.0
+Depends: ffmpeg, libgtk-3-0, libwebkit2gtk-4.0-37 | libwebkit2gtk-4.1-0, libcanberra-gtk-module, libcanberra-gtk3-module, gir1.2-webkit2-4.1 | gir1.2-webkit2-4.0, python3-gi, gir1.2-gtk-3.0
 Description: High-end premium video downloader by Lumen Lab.
 EOT
 

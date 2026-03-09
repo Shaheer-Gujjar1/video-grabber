@@ -11,6 +11,7 @@ from downloader import VideoDownloader
 # Simple persistence for settings
 SETTINGS_FILE = os.path.expanduser("~/.video_grabber_settings.json")
 HISTORY_FILE = os.path.expanduser("~/.video_grabber_history.json")
+RECENT_SEARCHES_FILE = os.path.expanduser("~/.video_grabber_recent.json")
 LOG_FILE = os.path.expanduser("~/.video_grabber.log")
 
 # Setup logging
@@ -82,39 +83,147 @@ class Api:
         return None
 
     def open_file_location(self, path):
-        if not path or not os.path.exists(path):
-            return
-        
-        path = os.path.abspath(path)
+        print(f"[DEBUG] open_file_location received path: {repr(path)}")
         import platform
         import subprocess
         system = platform.system()
+        try:
+            if not path:
+                print("[DEBUG] path is empty, aborting")
+                return
+            
+            folder = path if os.path.isdir(path) else os.path.dirname(path)
+            # Fallback to Downloads if path doesn't exist
+            if not folder or not os.path.exists(folder):
+                folder = os.path.expanduser("~/Downloads")
+                print(f"[DEBUG] path not found, falling back to: {folder}")
+
+            if system == 'Windows':
+                if os.path.exists(path) and not os.path.isdir(path):
+                    subprocess.run(['explorer', '/select,', os.path.abspath(path)])
+                else:
+                    subprocess.run(['explorer', folder])
+            elif system == 'Darwin':
+                subprocess.run(['open', folder])
+            else: # Linux
+                print(f"[DEBUG] Opening folder: {folder}")
+                subprocess.Popen(['xdg-open', folder], start_new_session=True)
+        except Exception as e:
+            print(f"[ERROR] open_file_location: {e}")
+
+    def update_progress(self, download_id, percent, speed_str, eta, filepath=None):
+        if self._window:
+            js_filepath = json.dumps(filepath) if filepath else "null"
+            self._window.evaluate_js(f"if(window.onDownloadProgress) window.onDownloadProgress('{download_id}', {percent}, '{speed_str}', {eta}, {js_filepath})")
+
+    def fetch_video_info(self, url):
+        try:
+            info = self.downloader.fetch_info(url)
+            if 'error' not in info:
+                self.add_recent_search(info, url)
+            return info
+        except Exception as e:
+            return {'error': str(e)}
+
+    def get_recent_searches(self):
+        if os.path.exists(RECENT_SEARCHES_FILE):
+            try:
+                with open(RECENT_SEARCHES_FILE, 'r') as f:
+                    return json.load(f)
+            except:
+                pass
+        return []
+
+    def add_recent_search(self, info, url):
+        recent = self.get_recent_searches()
+        # Remove if already exists (to move to top)
+        recent = [r for r in recent if r.get('url') != url]
+        
+        # Add new search to top
+        new_entry = {
+            'title': info.get('title'),
+            'thumbnail': info.get('thumbnail'),
+            'url': url,
+            'duration': info.get('duration'),
+            'timestamp': datetime.now().isoformat()
+        }
+        recent.insert(0, new_entry)
+        
+        # Limit to 5
+        recent = recent[:5]
         
         try:
-            if system == 'Windows':
-                # Use explorer /select to highlight the file
-                subprocess.run(['explorer', '/select,', path])
-            elif system == 'Darwin':
-                # macOS: open -R highlights the file in Finder
-                subprocess.run(['open', '-R', path])
-            else:
-                # Linux (GTK/GNOME usually supports dbus-send for highlighting, 
-                # but xdg-open just opens the folder. We'll fallback to opening the folder)
-                folder = os.path.dirname(path)
-                subprocess.run(['xdg-open', folder])
+            with open(RECENT_SEARCHES_FILE, 'w') as f:
+                json.dump(recent, f)
+        except:
+            pass
+
+    def pause_download(self, download_id):
+        try:
+            self.downloader.cancel_download(download_id)
+            return {'success': True}
         except Exception as e:
-            print(f"Error opening folder: {e}")
+            return {'error': str(e)}
+            
+    def delete_file(self, path):
+        print(f"[DEBUG] delete_file received path: {repr(path)}")
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+                print(f"[DEBUG] Successfully deleted: {path}")
+                return {'success': True}
+            else:
+                print(f"[DEBUG] File not found or path empty: {path}")
+                return {'error': f'File not found: {path}'}
+        except Exception as e:
+            print(f"[ERROR] delete_file: {e}")
+            return {'error': str(e)}
 
-    def update_progress(self, download_id, percent, speed_str, eta):
-        if self._window:
-            self._window.evaluate_js(f"if(window.onDownloadProgress) window.onDownloadProgress('{download_id}', {percent}, '{speed_str}', {eta})")
+    def get_file_thumbnail(self, path):
+        """Extract a thumbnail from a local file path."""
+        try:
+            if not path or not os.path.exists(path):
+                return None
+            return self.downloader.extract_thumbnail_from_file(path)
+        except Exception as e:
+            print(f"Error getting file thumbnail: {e}")
+            return None
 
-    def download_video(self, url, mode, quality, include_audio):
+    def check_file_exists(self, filename):
+        """Check if a file already exists in the default download directory."""
+        folder = self.settings.get('default_path')
+        if not folder or not os.path.exists(folder):
+            return {'exists': False}
+        
+        # Comprehensive check: sanitize name like yt-dlp does
+        import re
+        def sanitize(s):
+            return re.sub(r'[^\w\s.-]', '', s).strip()
+            
+        sanitized = sanitize(filename)
+        search_patterns = [
+            sanitized,
+            sanitized.replace(' ', '_'),
+            sanitized.replace(' ', '.'),
+            filename
+        ]
+        
+        files_in_folder = os.listdir(folder)
+        for f in files_in_folder:
+            name_without_ext = os.path.splitext(f)[0]
+            if any(p.lower() == name_without_ext.lower() for p in search_patterns):
+                return {'exists': True, 'path': os.path.join(folder, f)}
+                
+        return {'exists': False}
+
+    def download_video(self, url, mode, quality, include_audio, download_id=None, allow_duplicate=False):
         try:
             if not self._window:
                 return {'error': 'Window not initialized'}
             
-            download_id = str(uuid.uuid4())
+            if not download_id:
+                download_id = str(uuid.uuid4())
+                
             path = self.settings.get('default_path')
             
             if not path or not os.path.exists(path):
@@ -132,7 +241,7 @@ class Api:
             
             thread = threading.Thread(
                 target=self.downloader.download, 
-                args=(url, path, mode, quality, download_id),
+                args=(url, path, mode, quality, download_id, allow_duplicate),
                 daemon=True
             )
             thread.start()

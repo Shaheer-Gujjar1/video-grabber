@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { Download, Link2, Loader2, AlertCircle, CheckCircle2, ChevronDown, Settings, FolderOpen, History, Search } from "lucide-react";
+import { Download, Link2, Loader2, AlertCircle, CheckCircle2, ChevronDown, Settings, FolderOpen, History, Search, FileVideo, AudioWaveform, Sparkles, MonitorPlay } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -9,6 +9,7 @@ import VideoPreview from "@/components/VideoPreview";
 import FormatSelector from "@/components/FormatSelector";
 import DownloadsList from "@/components/DownloadsList";
 import { toast } from "sonner";
+import CustomModal from "@/components/CustomModal";
 
 function extractVideoId(url: string | undefined | null): string | null {
   if (!url) return null;
@@ -38,11 +39,12 @@ interface DownloadItem {
   title: string;
   percent: number;
   speed: string;
-  status: 'downloading' | 'completed' | 'error';
+  status: 'downloading' | 'completed' | 'error' | 'paused';
   path: string;
   url: string; // Add url for redownload
   thumbnail?: string;
   error?: string;
+  forceDuplicate?: boolean;
 }
 
 const Index = () => {
@@ -57,14 +59,26 @@ const Index = () => {
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [defaultPath, setDefaultPath] = useState<string>("");
   const [activeTab, setActiveTab] = useState("search");
+  const [recentSearches, setRecentSearches] = useState<any[]>([]);
+  const [showRecent, setShowRecent] = useState(false);
+
+  // Custom Modal States
+  const [duplicateModal, setDuplicateModal] = useState({ open: false });
+  const [deleteModal, setDeleteModal] = useState({ open: false, id: '', path: '' });
 
   useEffect(() => {
     // @ts-ignore
-    window.onDownloadProgress = (id: string, percent: number, speed: string, eta: number) => {
+    window.onDownloadProgress = (id: string, percent: number, speed: string, eta: number, filepath?: string) => {
       setDownloads(prev => {
         const updated = prev.map(dl => 
           dl.id === id 
-            ? { ...dl, percent, speed, status: (percent === 100 ? 'completed' : 'downloading') as 'completed' | 'downloading' } 
+            ? { 
+                ...dl, 
+                percent, 
+                speed, 
+                status: (percent === 100 ? 'completed' : 'downloading') as 'completed' | 'downloading',
+                path: filepath || dl.path // Update with exact file path if provided
+              } 
             : dl
         );
         if (percent === 100) {
@@ -82,11 +96,16 @@ const Index = () => {
         const path = await window.pywebview.api.get_default_path();
         setDefaultPath(path);
         
+        // Load recent searches
+        // @ts-ignore
+        const recent = await window.pywebview.api.get_recent_searches();
+        if (recent) setRecentSearches(recent);
+        
         // Load history
         // @ts-ignore
         const history: DownloadItem[] = await window.pywebview.api.get_history();
         if (history && Array.isArray(history)) {
-          // Mark interrupted downloads as error
+          // Keep paused as paused, mark downloading as error (interrupted)
           const cleanedHistory = history.map(h => 
             h.status === 'downloading' ? { ...h, status: 'error', error: 'Interrupted' } : h
           );
@@ -103,31 +122,38 @@ const Index = () => {
     }
   }, []);
 
-  const handleFetch = useCallback(async () => {
-    const id = extractVideoId(url.trim());
-    if (!id) {
-      toast.error("Please enter a valid YouTube URL");
+  const handleFetch = useCallback(async (targetUrl?: string) => {
+    const fetchUrl = targetUrl || url;
+    const trimmedUrl = fetchUrl.trim();
+    if (!trimmedUrl) {
+      toast.error("Please enter a valid URL");
       return;
     }
+
     setLoading(true);
+    setVideoInfo(null);
+    setShowRecent(false);
     try {
-      const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${id}`);
-      const data = await res.json();
-      setVideoInfo({
-        id,
-        title: data.title || "YouTube Video",
-        channel: data.author_name || "Unknown Channel",
-        duration: "--:--",
-        thumbnail: data.thumbnail_url || `https://i.ytimg.com/vi/${id}/mqdefault.jpg`,
-      });
-    } catch {
-      setVideoInfo({
-        id,
-        title: "YouTube Video",
-        channel: "Unknown Channel",
-        duration: "--:--",
-        thumbnail: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`,
-      });
+      // @ts-ignore
+      if (window.pywebview && window.pywebview.api) {
+        // @ts-ignore
+        const info = await window.pywebview.api.fetch_video_info(trimmedUrl);
+        setLoading(false);
+        if (info && !info.error) {
+          setVideoInfo(info);
+          if (targetUrl) setUrl(targetUrl);
+          // Refresh recent
+          // @ts-ignore
+          const recent = await window.pywebview.api.get_recent_searches();
+          if (recent) setRecentSearches(recent);
+        } else {
+          toast.error(info.error || "Failed to extract video information.");
+        }
+      } else {
+        toast.error("Running outside app container.");
+      }
+    } catch (err) {
+      toast.error("An error occurred while fetching video info.");
     }
     setLoading(false);
   }, [url]);
@@ -144,9 +170,20 @@ const Index = () => {
     }
   };
 
-  const handleDownload = async () => {
+  const handleDownload = async (forceDuplicate = false) => {
     if (!videoInfo) return;
 
+    if (!forceDuplicate) {
+      // Robust check: check backend for file existence
+      // @ts-ignore
+      const fileCheck = await window.pywebview.api.check_file_exists(videoInfo.title);
+      if (fileCheck.exists) {
+        setDuplicateModal({ open: true });
+        return;
+      }
+    }
+
+    setDuplicateModal({ open: false });
     setDownloading(true);
     setDownloadStatus("Starting...");
 
@@ -161,7 +198,9 @@ const Index = () => {
         url.trim(),
         mode,
         quality,
-        includeAudio
+        includeAudio,
+        null, // new id
+        forceDuplicate // true if confirmed duplicate
       );
 
       if (result.error) {
@@ -177,6 +216,7 @@ const Index = () => {
         path: result.path,
         url: url.trim(),
         thumbnail: videoInfo.thumbnail,
+        forceDuplicate: forceDuplicate
       };
       setDownloads(prev => {
         const updated = [newDownload, ...prev];
@@ -195,14 +235,80 @@ const Index = () => {
     }
   };
 
-  const handleDeleteDownload = (id: string) => {
+  const handlePause = async (id: string) => {
+    // @ts-ignore
+    if (window.pywebview && window.pywebview.api) {
+      // @ts-ignore
+      await window.pywebview.api.pause_download(id);
+      setDownloads(prev => {
+        const updated = prev.map(dl => dl.id === id ? { ...dl, status: 'paused' as const, speed: 'Paused' } : dl);
+        // @ts-ignore
+        window.pywebview.api.save_history(updated);
+        return updated;
+      });
+    }
+  };
+
+  const handleResume = async (id: string) => {
+    const dl = downloads.find(d => d.id === id);
+    if (!dl) return;
+    
+    setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'downloading' as const, speed: 'Resuming...' } : d));
+    
+    // @ts-ignore
+    if (window.pywebview && window.pywebview.api) {
+      // @ts-ignore
+      await window.pywebview.api.download_video(
+        dl.url, mode, quality, includeAudio, dl.id, dl.forceDuplicate || false
+      );
+    }
+  };
+
+  const handleFetchHistoryThumbnail = async (id: string, path: string) => {
+    // @ts-ignore
+    if (window.pywebview && window.pywebview.api) {
+      // @ts-ignore
+      const thumb = await window.pywebview.api.get_file_thumbnail(path);
+      if (thumb) {
+        setDownloads(prev => {
+          const updated = prev.map(dl => dl.id === id ? { ...dl, thumbnail: thumb } : dl);
+          // @ts-ignore
+          window.pywebview.api.save_history(updated);
+          return updated;
+        });
+      }
+    }
+  };
+
+  const handleDeleteDownload = (id: string, path: string) => {
+    setDeleteModal({ open: true, id, path });
+  };
+
+  const confirmDelete = async (deleteMedia: boolean) => {
+    const { id, path } = deleteModal;
+    if (deleteMedia) {
+       // Delete physical file
+       // @ts-ignore
+       if (window.pywebview && window.pywebview.api) {
+         // @ts-ignore
+         const result = await window.pywebview.api.delete_file(path);
+         if (result && result.error) {
+           toast.error("Could not delete file", { description: result.error });
+         } else {
+           toast.success("Media and record deleted");
+         }
+       }
+    } else {
+       toast.success("History record removed");
+    }
+
     setDownloads(prev => {
       const updated = prev.filter(dl => dl.id !== id);
       // @ts-ignore
       if (window.pywebview && window.pywebview.api) window.pywebview.api.save_history(updated);
       return updated;
     });
-    toast.success("Download removed from history");
+    setDeleteModal({ open: false, id: '', path: '' });
   };
 
   const handleRedownload = async (downloadUrl: string | undefined) => {
@@ -252,11 +358,21 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-[#020205] text-foreground font-body pb-20 overflow-x-hidden relative">
-      {/* Background Decoration */}
+      {/* Premium Subtle Aurora Background */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/20 blur-[120px] rounded-full animate-float opacity-50" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-rose-500/10 blur-[120px] rounded-full animate-float opacity-30" style={{ animationDelay: '-5s' }} />
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 brightness-100 contrast-150 pointer-events-none mix-blend-overlay" />
+        <div 
+          className="absolute top-[-30%] left-[-20%] w-[100vw] h-[100vh] rounded-full blur-[120px] animate-aurora-1"
+          style={{ background: 'radial-gradient(circle, hsla(210, 95%, 60%, 0.5) 0%, transparent 80%)', mixBlendMode: 'plus-lighter' }}
+        />
+        <div 
+          className="absolute bottom-[-20%] right-[-20%] w-[110vw] h-[110vh] rounded-full blur-[140px] animate-aurora-2"
+          style={{ background: 'radial-gradient(circle, hsla(220, 95%, 50%, 0.4) 0%, transparent 80%)', mixBlendMode: 'plus-lighter' }}
+        />
+        <div 
+          className="absolute top-[10%] left-[50%] w-[80vw] h-[80vh] rounded-full blur-[100px] animate-aurora-1-reverse"
+          style={{ background: 'radial-gradient(circle, hsla(190, 90%, 65%, 0.35) 0%, transparent 80%)', mixBlendMode: 'plus-lighter' }}
+        />
+        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.15] brightness-100 contrast-150 mix-blend-overlay" />
       </div>
 
       {/* Floating Navbar */}
@@ -273,17 +389,27 @@ const Index = () => {
           </div>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-auto">
-            <TabsList className="bg-white/5 border border-white/5 p-1 rounded-2xl">
-              <TabsTrigger value="search" className="gap-2 rounded-xl h-10 px-5 data-[state=active]:premium-gradient data-[state=active]:text-white data-[state=active]:premium-glow transition-all duration-500">
+            <TabsList className="bg-white/5 border border-white/10 p-1 rounded-2xl h-12">
+              <TabsTrigger 
+                value="search" 
+                className="gap-2 rounded-xl h-10 px-5 transition-all duration-300 neon-btn"
+              >
                 <Search className="w-4 h-4" /> <span className="hidden sm:inline font-bold">Download</span>
               </TabsTrigger>
-              <TabsTrigger value="history" className="gap-2 rounded-xl h-10 px-5 data-[state=active]:premium-gradient data-[state=active]:text-white data-[state=active]:premium-glow transition-all duration-500">
-                <History className="w-4 h-4" /> <span className="hidden sm:inline font-bold">History</span>
+              <TabsTrigger 
+                value="history" 
+                className="gap-2 rounded-xl h-10 px-5 transition-all duration-300 neon-btn"
+              >
+                <History className="w-4 h-4" /> 
+                <span className="hidden sm:inline font-bold">History</span>
                 {downloads.filter(d => d.status === 'downloading').length > 0 && (
                   <span className="flex h-1.5 w-1.5 rounded-full bg-white animate-pulse ml-1" />
                 )}
               </TabsTrigger>
-              <TabsTrigger value="settings" className="gap-2 rounded-xl h-10 px-5 data-[state=active]:premium-gradient data-[state=active]:text-white data-[state=active]:premium-glow transition-all duration-500">
+              <TabsTrigger 
+                value="settings" 
+                className="gap-2 rounded-xl h-10 px-5 transition-all duration-300 neon-btn"
+              >
                 <Settings className="w-4 h-4" /> <span className="hidden sm:inline font-bold">Settings</span>
               </TabsTrigger>
             </TabsList>
@@ -295,8 +421,12 @@ const Index = () => {
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           {/* SEARCH TAB */}
           <TabsContent value="search" className="space-y-12 animate-in fade-in slide-in-from-bottom-8 duration-700">
-            <div className="text-center space-y-4 max-w-xl mx-auto">
-              <h1 className="font-display text-5xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-white via-white to-white/40">
+            <div className="text-center space-y-4 max-w-xl mx-auto relative">
+              <div className="absolute top-0 right-10 p-4 opacity-20 pointer-events-none">
+                <Sparkles className="w-16 h-16 text-primary animate-pulse" />
+              </div>
+              <h1 className="font-display text-5xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-white via-white to-white/40 flex items-center justify-center gap-4 animate-float">
+                <MonitorPlay className="w-12 h-12 text-white neon-hover-ghost rounded-full p-2" />
                 Lumen Lab <br /> Video Grabber
               </h1>
               <p className="text-muted-foreground text-lg font-medium leading-relaxed opacity-70">
@@ -304,23 +434,59 @@ const Index = () => {
               </p>
             </div>
 
-            <div className="flex gap-3 max-w-2xl mx-auto">
+            <div className="flex gap-4 max-w-4xl mx-auto items-center relative">
               <div className="relative flex-1 group">
-                <Link2 className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                <div className="absolute left-6 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-primary transition-colors">
+                  <Link2 className="w-6 h-6" />
+                </div>
                 <Input
+                  placeholder="Paste Video Link (YouTube, Instagram, etc.)..."
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
+                  onFocus={() => recentSearches.length > 0 && setShowRecent(true)}
                   onKeyDown={(e) => e.key === "Enter" && handleFetch()}
-                  placeholder="Paste YouTube Link..."
-                  className="pl-12 h-16 bg-white/5 border-white/5 focus-visible:ring-primary/40 backdrop-blur-xl rounded-2xl text-lg font-medium transition-all"
+                  className="h-16 pl-16 pr-6 bg-white/5 border-white/10 rounded-2xl text-lg focus:ring-primary/20 transition-all font-body text-white placeholder:text-white/20"
                 />
+                
+                {showRecent && recentSearches.length > 0 && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowRecent(false)} />
+                    <div className="absolute top-full left-0 right-0 mt-3 p-3 glass-card rounded-2xl border-white/10 z-50 animate-in fade-in slide-in-from-top-4 duration-300">
+                      <div className="px-3 py-2 flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Recent Expeditions</span>
+                        <Button variant="ghost" size="sm" onClick={() => setShowRecent(false)} className="h-6 text-[10px] uppercase font-bold neon-btn px-2">Close</Button>
+                      </div>
+                      <div className="space-y-1 mt-2">
+                        {recentSearches.map((s, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => handleFetch(s.url)}
+                            className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-white/5 transition-all group text-left"
+                          >
+                            <img src={s.thumbnail} alt="" className="w-14 h-9 rounded-md object-cover border border-white/10 opacity-70 group-hover:opacity-100 transition-opacity" />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-bold text-white truncate">{s.title}</div>
+                              <div className="text-[10px] text-muted-foreground truncate opacity-60">{s.url}</div>
+                            </div>
+                            <Sparkles className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-all scale-0 group-hover:scale-110" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
               <Button
-                onClick={handleFetch}
-                disabled={loading || !url.trim()}
-                className="h-16 px-10 premium-gradient premium-glow font-bold rounded-2xl text-lg hover:scale-[1.02] active:scale-[0.98] transition-all"
+                onClick={() => handleFetch()}
+                disabled={loading || (!url.trim() && !showRecent)}
+                className="h-16 px-10 font-bold rounded-2xl text-lg flex gap-3 items-center group neon-btn"
               >
-                {loading ? <Loader2 className="w-6 h-6 animate-spin" /> : "Fetch"}
+                {loading ? <Loader2 className="w-6 h-6 animate-spin" /> : (
+                  <>
+                    <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+                    <span>Fetch</span>
+                  </>
+                )}
               </Button>
             </div>
 
@@ -343,9 +509,9 @@ const Index = () => {
                 />
 
                 <Button
-                  onClick={handleDownload}
+                  onClick={() => handleDownload(false)}
                   disabled={downloading}
-                  className="w-full h-16 premium-gradient text-white font-display font-bold text-xl hover:scale-[1.01] active:scale-[0.99] transition-all rounded-2xl premium-glow"
+                  className="w-full h-16 text-white font-display font-bold text-xl rounded-2xl neon-btn"
                 >
                   {downloading ? (
                     <>
@@ -354,7 +520,7 @@ const Index = () => {
                     </>
                   ) : (
                     <>
-                      <Download className="w-6 h-6 mr-3" />
+                      <Download className="w-7 h-7 mr-3" />
                       Begin Acquisition
                     </>
                   )}
@@ -379,6 +545,9 @@ const Index = () => {
                 downloads={downloads} 
                 onDelete={handleDeleteDownload}
                 onRedownload={handleRedownload}
+                onPause={handlePause}
+                onResume={handleResume}
+                onFetchThumbnail={handleFetchHistoryThumbnail}
               />
             </div>
           </TabsContent>
@@ -408,8 +577,13 @@ const Index = () => {
                         value={defaultPath || "Awaiting path selection..."} 
                         className="bg-white/5 border-white/5 font-mono text-xs h-14 rounded-2xl px-5"
                       />
-                      <Button variant="secondary" onClick={handleSetPath} className="h-14 px-8 rounded-2xl gap-3 font-bold hover:bg-white/10 transition-colors">
-                        Change
+                      <Button 
+                        variant="secondary" 
+                        onClick={handleSetPath} 
+                        className="h-14 px-8 rounded-2xl gap-3 font-bold neon-btn"
+                      >
+                        <FolderOpen className="w-5 h-5" />
+                        <span>Change</span>
                       </Button>
                     </div>
                     <p className="text-[10px] text-muted-foreground font-medium italic opacity-60 ml-1">
@@ -422,6 +596,42 @@ const Index = () => {
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* Floating Footer */}
+      <footer className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-5 duration-1000">
+        <div className="glass-navbar rounded-full px-8 py-3 flex items-center gap-3 premium-glow">
+          <p className="text-white/60 text-sm font-medium tracking-tight">
+            Designed and Developed by{" "}
+            <span className="premium-gradient bg-clip-text text-transparent font-bold text-base ml-1">
+              Shaheer Ahmed
+            </span>
+          </p>
+        </div>
+      </footer>
+
+      {/* THEMED MODALS */}
+      <CustomModal
+        isOpen={duplicateModal.open}
+        onClose={() => setDuplicateModal({ open: false })}
+        title="File Already Exists"
+        description={`A file named "${videoInfo?.title}" is already in your download folder. Would you like to create a new copy?`}
+        confirmLabel="Download Anyway"
+        cancelLabel="Cancel"
+        onConfirm={() => handleDownload(true)}
+        type="warning"
+      />
+
+      <CustomModal
+        isOpen={deleteModal.open}
+        onClose={() => setDeleteModal({ open: false, id: '', path: '' })}
+        title="Permanently Delete?"
+        description="Would you like to delete the physical media file from your computer as well, or just remove the history point?"
+        confirmLabel="Delete Media & Record"
+        cancelLabel="Record Only"
+        onConfirm={() => confirmDelete(true)}
+        onCancel={() => confirmDelete(false)}
+        type="danger"
+      />
     </div>
   );
 };

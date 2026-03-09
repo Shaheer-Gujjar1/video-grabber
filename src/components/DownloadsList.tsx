@@ -1,5 +1,6 @@
 import { Progress } from "@/components/ui/progress";
-import { Download, CheckCircle2, XCircle, FolderOpen, Trash2, RefreshCw } from "lucide-react";
+import { useEffect } from "react";
+import { Download, CheckCircle2, XCircle, FolderOpen, Trash2, RefreshCw, FileVideo, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface DownloadItem {
@@ -7,7 +8,7 @@ interface DownloadItem {
   title: string;
   percent: number;
   speed: string;
-  status: 'downloading' | 'completed' | 'error';
+  status: 'downloading' | 'completed' | 'error' | 'paused';
   path: string;
   url: string;
   thumbnail?: string;
@@ -16,11 +17,14 @@ interface DownloadItem {
 
 interface DownloadsListProps {
   downloads: DownloadItem[];
-  onDelete: (id: string) => void;
+  onDelete: (id: string, path: string) => void;
   onRedownload: (url: string) => void;
+  onPause: (id: string) => void;
+  onResume: (id: string) => void;
+  onFetchThumbnail?: (id: string, path: string) => void;
 }
 
-const DownloadsList = ({ downloads, onDelete, onRedownload }: DownloadsListProps) => {
+const DownloadsList = ({ downloads, onDelete, onRedownload, onPause, onResume, onFetchThumbnail }: DownloadsListProps) => {
   const handleOpenFolder = (path: string) => {
     // @ts-ignore
     if (window.pywebview && window.pywebview.api) {
@@ -44,6 +48,9 @@ const DownloadsList = ({ downloads, onDelete, onRedownload }: DownloadsListProps
             <div className="absolute inset-0 bg-gradient-to-r from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
             
             <div className="flex items-start gap-6 relative z-10">
+              {!dl.thumbnail && dl.status === 'completed' && dl.path && (
+                <ThumbnailFetcher id={dl.id} path={dl.path} onFetch={onFetchThumbnail} />
+              )}
               {dl.thumbnail ? (
                 <div className="shrink-0 w-32 h-20 rounded-2xl overflow-hidden bg-black/40 border border-white/10 shadow-2xl relative group-hover:scale-105 transition-transform duration-500">
                   <img 
@@ -61,12 +68,16 @@ const DownloadsList = ({ downloads, onDelete, onRedownload }: DownloadsListProps
                   )}
                 </div>
               ) : (
-                <div className="shrink-0 w-32 h-20 rounded-2xl bg-white/5 flex items-center justify-center border border-white/5">
-                  <Download className="w-8 h-8 text-white/10" />
+                <div className="shrink-0 w-32 h-20 rounded-2xl bg-white/5 flex items-center justify-center border border-white/5 relative group-hover:scale-105 transition-transform duration-500">
+                  <div className="absolute inset-0 bg-primary/5 animate-pulse" />
+                  <FileVideo className="w-8 h-8 text-white/10" />
                 </div>
               )}
               <div className="flex-1 min-w-0 pt-1">
-                <h3 className="text-lg font-display font-bold text-white truncate leading-tight tracking-tight">{dl.title}</h3>
+                <h3 className="text-lg font-display font-bold text-white truncate leading-tight tracking-tight flex items-center gap-2">
+                  <FileVideo className="w-5 h-5 text-primary opacity-80 shrink-0" />
+                  {dl.title}
+                </h3>
                 <div className="flex items-center gap-3 mt-2">
                   {dl.status === 'downloading' ? (
                     <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-primary/20 border border-primary/20">
@@ -77,6 +88,11 @@ const DownloadsList = ({ downloads, onDelete, onRedownload }: DownloadsListProps
                     <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
                       <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Saved</span>
+                    </div>
+                  ) : dl.status === 'paused' ? (
+                    <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
+                      <Pause className="w-3.5 h-3.5 text-amber-500" />
+                      <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">Paused</span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-destructive/10 border border-destructive/20">
@@ -93,19 +109,43 @@ const DownloadsList = ({ downloads, onDelete, onRedownload }: DownloadsListProps
                     variant="ghost" 
                     size="icon"
                     onClick={() => handleOpenFolder(dl.path)}
-                    className="h-10 w-10 rounded-xl bg-white/5 hover:bg-primary/20 hover:text-primary transition-all duration-300"
+                    className="h-10 w-10 rounded-xl neon-btn"
                     title="Reveal File"
                   >
                     <FolderOpen className="w-4 h-4" />
                   </Button>
                 )}
                 
-                {dl.status !== 'downloading' && (
-                   <Button
+                {dl.status === 'downloading' && (
+                  <Button
+                    variant="ghost" 
+                    size="icon"
+                    onClick={() => onPause(dl.id)}
+                    className="h-10 w-10 rounded-xl bg-white/5 hover:bg-amber-500/20 hover:text-amber-500 transition-all duration-300"
+                    title="Pause Download"
+                  >
+                    <Pause className="w-4 h-4" />
+                  </Button>
+                )}
+
+                {dl.status === 'paused' && (
+                  <Button
+                    variant="ghost" 
+                    size="icon"
+                    onClick={() => onResume(dl.id)}
+                    className="h-10 w-10 rounded-xl bg-white/5 hover:bg-emerald-500/20 hover:text-emerald-500 transition-all duration-300"
+                    title="Resume Download"
+                  >
+                    <Play className="w-4 h-4 ml-0.5" />
+                  </Button>
+                )}
+
+                {dl.status !== 'downloading' && dl.status !== 'paused' && (
+                  <Button
                     variant="ghost" 
                     size="icon"
                     onClick={() => onRedownload(dl.url)}
-                    className="h-10 w-10 rounded-xl bg-white/5 hover:bg-primary/20 hover:text-primary transition-all duration-300"
+                    className="h-10 w-10 rounded-xl neon-btn"
                     title="Acquire Again"
                   >
                     <RefreshCw className="w-4 h-4" />
@@ -115,8 +155,8 @@ const DownloadsList = ({ downloads, onDelete, onRedownload }: DownloadsListProps
                 <Button
                   variant="ghost" 
                   size="icon"
-                  onClick={() => onDelete(dl.id)}
-                  className="h-10 w-10 rounded-xl bg-white/5 hover:bg-destructive/20 hover:text-destructive transition-all duration-300"
+                  onClick={() => onDelete(dl.id, dl.path)}
+                  className="h-10 w-10 rounded-xl neon-btn-destructive"
                   title="Expunge Record"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -124,14 +164,14 @@ const DownloadsList = ({ downloads, onDelete, onRedownload }: DownloadsListProps
               </div>
             </div>
             
-            {dl.status === 'downloading' && (
+            {(dl.status === 'downloading' || dl.status === 'paused') && (
               <div className="mt-6 space-y-2 relative z-10">
                 <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden border border-white/5">
                     <div 
-                        className="h-full premium-gradient transition-all duration-500 ease-out relative"
+                        className={`h-full transition-all duration-500 ease-out relative ${dl.status === 'paused' ? 'bg-amber-500' : 'premium-gradient'}`}
                         style={{ width: `${dl.percent}%` }}
                     >
-                        <div className="absolute inset-0 bg-white/20 animate-pulse" />
+                        {dl.status === 'downloading' && <div className="absolute inset-0 bg-white/20 animate-pulse" />}
                     </div>
                 </div>
                 <div className="flex justify-between items-center px-1">
@@ -147,6 +187,15 @@ const DownloadsList = ({ downloads, onDelete, onRedownload }: DownloadsListProps
       </div>
     </div>
   );
+};
+
+const ThumbnailFetcher = ({ id, path, onFetch }: { id: string, path: string, onFetch?: (id: string, path: string) => void }) => {
+  useEffect(() => {
+    if (onFetch) {
+      onFetch(id, path);
+    }
+  }, [id, path, onFetch]);
+  return null;
 };
 
 export default DownloadsList;
