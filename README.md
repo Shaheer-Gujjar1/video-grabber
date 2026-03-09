@@ -60,4 +60,4 @@ python3 app.py
 - `dist/`: Production build of the frontend.
 
 ---
-Created and refined by **Lumen Lab**.
+Created and refined by **Shaheer Ahmed**.
