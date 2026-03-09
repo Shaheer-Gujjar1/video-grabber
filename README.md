@@ -4,6 +4,12 @@ A premium, high-performance desktop media acquisition engine built with **React*
 
 ![Lumen Lab Logo](public/Lumen-Lab-Logo-BG-Removed.png)
 
+> ⚠️ **Debian-based Linux only (Deb/Ubuntu)**
+>
+> This application is intended **only for Debian-based (DEB/APT) Linux distributions** — for example **Debian, Ubuntu, Linux Mint, Pop!_OS**, and other Ubuntu/Debian derivatives.
+>
+> It depends on **APT/DEB tooling and packages**, so it is **not expected to work out-of-the-box** on non‑Debian distros such as **Arch (pacman), Fedora (dnf), openSUSE (zypper)**, etc.
+
 ## ✨ Features
 
 -   **Premium Aesthetics**: A state-of-the-art interface featuring glassmorphism, floating layouts, and cinematic background animations.
